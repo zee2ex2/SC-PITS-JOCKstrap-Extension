@@ -12,12 +12,9 @@ AUTH_FILE = None
 SYNC_SETTINGS_FILE = None
 DISCORD_API = "https://discord.com/api/v10"
 
-CONFIG_DEFAULTS = {
-    "client_id": "1503601298543480873",
-    "client_secret": "dwmk1wnBvslBArlHj4plos3za_XtpCpT",
-    "guild_id": "1504015726040711201",
-    "required_roles": "Admin",
-}
+CLIENT_ID = os.environ.get("DISCORD_CLIENT_ID", "")
+CLIENT_SECRET = os.environ.get("DISCORD_CLIENT_SECRET", "")
+REDIRECT_PATH = "/ext/jock/callback"
 
 
 def get_data_dir():
@@ -79,16 +76,16 @@ def discord_api_request(method, endpoint, token=None, body=None):
         return None, str(e)
 
 
-def exchange_code(code, redirect_uri, client_id, client_secret):
+def exchange_code(code, redirect_uri):
     data = urllib.parse.urlencode({
-        "client_id": client_id, "client_secret": client_secret,
+        "client_id": CLIENT_ID, "client_secret": CLIENT_SECRET,
         "grant_type": "authorization_code", "code": code, "redirect_uri": redirect_uri,
     }).encode()
     resp, err = discord_api_request("POST", "oauth2/token", body=data)
     return resp, err
 
 
-def get_own_guild_member(guild_id, access_token):
+def get_guild_member(guild_id, access_token):
     resp, err = discord_api_request("GET", f"users/@me/guilds/{guild_id}/member", token=access_token)
     return resp, err
 
@@ -127,7 +124,8 @@ class JockStrapExtension(Extension):
     def on_startup(self, g):
         self.g = g
         g["ext_jock_auth"] = load_auth()
-        g["ext_jock_config"] = CONFIG_DEFAULTS.copy()
+        if not CLIENT_ID or not CLIENT_SECRET:
+            print("[jock_strap] WARNING: DISCORD_CLIENT_ID and DISCORD_CLIENT_SECRET env vars required")
         self.sync_settings = load_sync_settings()
         self._sync_engine = None
         self._start_sync_engine()
@@ -165,7 +163,6 @@ class JockStrapExtension(Extension):
 
     def get_context(self):
         auth = self.g.get("ext_jock_auth", {})
-        config = self.g.get("ext_jock_config", {})
         logged_in = bool(auth.get("access_token"))
         unread = self._unread_count()
         badge = f'<span class="notif-badge">{unread}</span>' if unread > 0 else ""
@@ -178,7 +175,6 @@ class JockStrapExtension(Extension):
             "ext_jock_tag": auth.get("discord_tag", ""),
             "ext_jock_guild_verified": str(auth.get("guild_verified", False)).lower(),
             "ext_jock_roles": auth.get("guild_roles", ""),
-            "ext_jock_client_id": config.get("client_id", ""),
             "ext_jock_unread": str(unread),
             "ext_jock_community_url": self.sync_settings.get("community_url", ""),
             "ext_jock_has_api_key": str(bool(self.sync_settings.get("api_key", ""))).lower(),
@@ -186,34 +182,44 @@ class JockStrapExtension(Extension):
         }
 
     def get_settings_html(self):
-        config = self.g.get("ext_jock_config", {})
         auth = self.g.get("ext_jock_auth", {})
         logged_in = bool(auth.get("access_token"))
         tag = auth.get("discord_tag", "")
         roles = auth.get("guild_roles", "")
         verified = auth.get("guild_verified", False)
+        selected_guild_name = auth.get("guild_name", "")
         community_url = self.sync_settings.get("community_url", "")
         api_key = self.sync_settings.get("api_key", "")
         auto_sync = self.sync_settings.get("auto_sync", True)
         auto_checked = 'checked' if auto_sync else ''
 
-        rows = ""
-        for key, default in CONFIG_DEFAULTS.items():
-            val = config.get(key, default)
-            input_type = "password" if "secret" in key or "token" in key else "text"
-            rows += f"""
-            <tr>
-                <td><label for="jock_{key}">{key.replace('_', ' ').title()}</label></td>
-                <td><input type="{input_type}" id="jock_{key}" name="jock_{key}" value="{val}" style="width:100%;font-family:monospace"></td>
-            </tr>"""
         status_color = "var(--accent)" if verified else "var(--danger)"
         status_text = "Verified" if verified else "Not Verified"
+        guild_info = ""
+        if selected_guild_name:
+            guild_info = f"<p style='margin:4px 0'>Guild: <strong>{esc(selected_guild_name)}</strong> <span style='color:{status_color}'>({status_text})</span></p>"
+        else:
+            guild_info = f"<p style='margin:4px 0'>Guild: <span style='color:{status_color}'>Not selected</span></p>"
+
         login_section = ""
         if logged_in:
+            guild_selector = ""
+            guilds = auth.get("guilds", [])
+            if guilds:
+                opts = "".join(
+                    f'<option value="{g["id"]}" {"selected" if g["id"] == auth.get("guild_id", "") else ""}>{esc(g.get("name", "?"))}</option>'
+                    for g in guilds
+                )
+                guild_selector = f"""<form action="/ext/jock/guild-choose" method="post" style="margin-top:8px">
+                <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--muted)">Active Guild</label>
+                <div style="display:flex;gap:8px"><select name="guild_id" style="flex:1">{opts}</select>
+                <button type="submit">Switch</button></div>
+                </form>"""
             login_section = f"""
-            <p style="margin:12px 0">Logged in as <strong>{tag}</strong></p>
-            <p style="margin:4px 0">Guild: <span style="color:{status_color}">{status_text}</span></p>
-            <p style="margin:4px 0">Roles: {roles}</p>
+            <p style="margin:12px 0">Logged in as <strong>{esc(tag)}</strong></p>
+            {guild_info}
+            {guild_selector}
+            <p style="margin:4px 0">Roles: {esc(roles)}</p>
             <form action="/ext/jock/logout" method="post" style="display:inline">
                 <button type="submit" class="danger-button">Disconnect Discord</button>
             </form>
@@ -222,24 +228,18 @@ class JockStrapExtension(Extension):
             </form>
             """
         else:
-            cid = config.get("client_id", "")
-            if cid:
+            if CLIENT_ID:
                 redirect = self.g.get("LOCAL_URL", "http://localhost:9100")
-                encoded = urllib.parse.quote(f"{redirect}/ext/jock/callback")
-                url = f"https://discord.com/api/oauth2/authorize?client_id={cid}&response_type=code&redirect_uri={encoded}&scope=identify+guilds.members.read"
+                encoded = urllib.parse.quote(f"{redirect}{REDIRECT_PATH}")
+                url = f"https://discord.com/api/oauth2/authorize?client_id={CLIENT_ID}&response_type=code&redirect_uri={encoded}&scope=identify+guilds+guilds.members.read"
                 login_section = f'<a class="button" href="{url}" style="margin-top:8px;display:inline-block">Login with Discord</a>'
             else:
-                login_section = '<p class="subtle">Set Client ID above, then save to enable Discord login.</p>'
+                login_section = '<p class="subtle" style="color:var(--error)">DISCORD_CLIENT_ID not configured. Set the environment variable and restart PITS.</p>'
 
         return f"""
         <section class="panel">
             <div class="section-heading"><h2>JOCK Strap</h2></div>
-            <form action="/ext/jock/config" method="post">
-                <table class="settings-table" style="width:100%"><tbody>{rows}</tbody></table>
-                <div style="margin-top:12px;display:flex;gap:8px;align-items:center">
-                    <button type="submit">Save Config</button>
-                </div>
-            </form>
+            <p class="muted" style="font-size:13px">Discord OAuth login reads <code>DISCORD_CLIENT_ID</code> and <code>DISCORD_CLIENT_SECRET</code> from environment variables. Set them in your PITS environment and restart.</p>
             <hr style="border:none;border-top:1px solid var(--line);margin:16px 0">
             {login_section}
         </section>
@@ -273,7 +273,8 @@ class JockStrapExtension(Extension):
             return None, False
         handlers = {
             "/ext/jock/callback": self._handle_callback,
-            "/ext/jock/config": self._handle_config,
+            "/ext/jock/guild-select": self._handle_guild_select,
+            "/ext/jock/guild-choose": self._handle_guild_choose,
             "/ext/jock/logout": self._handle_logout,
             "/ext/jock/sync": self._handle_sync,
             "/ext/jock/sync-settings": self._handle_sync_settings,
@@ -321,16 +322,7 @@ class JockStrapExtension(Extension):
         except Exception:
             pass
 
-    # --- Config ---
-    def _handle_config(self, qs, data, method):
-        if method != "POST" or not data:
-            return self._redirect("/settings")
-        config = self.g.get("ext_jock_config", {})
-        for key in CONFIG_DEFAULTS:
-            config[key] = data.get(f"jock_{key}", "")
-        self.g["ext_jock_config"] = config
-        return self._redirect("/settings", "JOCK config saved.")
-
+    # --- Logout ---
     def _handle_logout(self, qs, data, method):
         if method != "POST":
             return None, False
@@ -344,16 +336,11 @@ class JockStrapExtension(Extension):
         error = qs.get("error", "")
         if error or not code:
             return self._redirect("/settings", f"Discord auth error: {error}", "error")
-        config = self.g.get("ext_jock_config", {})
-        cid = config.get("client_id", "")
-        secret = config.get("client_secret", "")
-        guild_id = config.get("guild_id", "")
-        required_roles = config.get("required_roles", "")
-        if not cid or not secret:
-            return self._redirect("/settings", "JOCK not configured.", "error")
+        if not CLIENT_ID or not CLIENT_SECRET:
+            return self._redirect("/settings", "Discord credentials not configured (env vars).", "error")
         local_url = self.g.get("LOCAL_URL", "http://localhost:9100")
-        redirect_uri = f"{local_url}/ext/jock/callback"
-        token_data, err = exchange_code(code, redirect_uri, cid, secret)
+        redirect_uri = f"{local_url}{REDIRECT_PATH}"
+        token_data, err = exchange_code(code, redirect_uri)
         if err or not token_data:
             return self._redirect("/settings", f"Token exchange failed: {err}", "error")
         access_token = token_data.get("access_token")
@@ -362,35 +349,69 @@ class JockStrapExtension(Extension):
             return self._redirect("/settings", f"Failed to get user: {err}", "error")
         discord_id = user_data.get("id")
         discord_tag = f"{user_data.get('username')}#{user_data.get('discriminator', '0')}"
-        guild_verified = False
-        guild_roles = ""
-        role_match = False
-        if guild_id:
-            member_data, m_err = get_own_guild_member(guild_id, access_token)
-            if member_data and not m_err:
-                guild_verified = True
-                guild_roles = ", ".join(member_data.get("roles", []))
-                if required_roles:
-                    user_role_ids = set(member_data.get("roles", []))
-                    required_set = set(r.strip() for r in required_roles.split(",") if r.strip())
-                    if required_set and required_set.intersection(user_role_ids):
-                        role_match = True
-                else:
-                    role_match = True
+        guilds_data, g_err = discord_api_request("GET", "users/@me/guilds", token=access_token)
+        guilds = guilds_data if isinstance(guilds_data, list) else []
         auth = {
             "discord_id": discord_id, "discord_tag": discord_tag,
             "access_token": access_token,
             "refresh_token": token_data.get("refresh_token", ""),
             "expires_at": token_data.get("expires_in", 0),
-            "guild_verified": guild_verified, "guild_roles": guild_roles,
-            "role_match": role_match,
+            "guilds": guilds,
+            "guild_id": "",
+            "guild_name": "",
+            "guild_verified": False,
+            "guild_roles": "",
+            "role_match": False,
         }
         save_auth(auth)
         self.g["ext_jock_auth"] = auth
-        if guild_verified:
-            status = "Guild verified!" if role_match else f"Guild found but missing required role."
-        else:
-            status = "Connected but not in guild."
+        if guilds:
+            return self._redirect("/ext/jock/guild-select", "Select your guild.")
+        return self._redirect("/settings", "Logged in (no guilds found).")
+
+    def _handle_guild_select(self, qs, data, method):
+        auth = self.g.get("ext_jock_auth", {})
+        guilds = auth.get("guilds", [])
+        if not guilds:
+            return self._redirect("/settings", "No guilds available.")
+        opts = "".join(
+            f'<option value="{g["id"]}">{esc(g.get("name", "?"))}</option>'
+            for g in guilds
+        )
+        content = f"""<section class="panel">
+        <div class="section-heading"><h2>Select Guild</h2></div>
+        <p>Choose the Discord server (guild) to use for role verification.</p>
+        <form action="/ext/jock/guild-choose" method="post" style="margin-top:12px">
+            <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--muted)">Guild</label>
+            <select name="guild_id" style="width:100%;max-width:400px">{opts}</select>
+            <button type="submit" style="margin-top:8px">Confirm</button>
+        </form>
+        <a class="button ghost" href="/settings" style="margin-top:8px;display:inline-block">Skip</a>
+        </section>"""
+        body = self._render_page(content)
+        return body, True
+
+    def _handle_guild_choose(self, qs, data, method):
+        if method != "POST":
+            return None, False
+        auth = self.g.get("ext_jock_auth", {})
+        guild_id = data.get("guild_id", "")
+        access_token = auth.get("access_token", "")
+        if not guild_id or not access_token:
+            return self._redirect("/settings", "Missing guild or auth.", "error")
+        guilds = auth.get("guilds", [])
+        guild_name = next((g.get("name", "") for g in guilds if g["id"] == guild_id), "")
+        member_data, m_err = get_guild_member(guild_id, access_token)
+        guild_verified = bool(member_data and not m_err)
+        guild_roles = ", ".join(member_data.get("roles", [])) if member_data else ""
+        auth["guild_id"] = guild_id
+        auth["guild_name"] = guild_name
+        auth["guild_verified"] = guild_verified
+        auth["guild_roles"] = guild_roles
+        auth["role_match"] = guild_verified
+        save_auth(auth)
+        self.g["ext_jock_auth"] = auth
+        status = f"Guild '{guild_name}' selected." if guild_verified else f"Guild '{guild_name}' selected but membership not confirmed."
         return self._redirect("/settings", status)
 
     # --- Sync ---
