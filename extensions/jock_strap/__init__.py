@@ -136,8 +136,12 @@ class JockStrapExtension(Extension):
         def poll():
             if self.sync_settings.get("auto_sync", False):
                 self._poll_notifications()
-            threading.Timer(60, poll).start()
-        threading.Timer(60, poll).start()
+            t = threading.Timer(60, poll)
+            t.daemon = True
+            t.start()
+        t = threading.Timer(60, poll)
+        t.daemon = True
+        t.start()
 
     def _poll_notifications(self):
         community_url = self.sync_settings.get("community_url", "")
