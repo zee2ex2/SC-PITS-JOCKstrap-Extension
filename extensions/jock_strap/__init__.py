@@ -134,26 +134,41 @@ class JockStrapExtension(Extension):
         logged_in = bool(auth.get("client_token"))
         unread = self._unread_count()
         badge = f'<span class="notif-badge">{unread}</span>' if unread > 0 else ""
+        name = auth.get("display_name", "") or "User"
+        community_url = self.sync_settings.get("community_url", "")
+        shower_link = f'<a class="button ghost" href="{esc(community_url)}" target="_blank">ShoWER</a>' if community_url else ""
+        title_suffix = '<span style="font-size:11px;font-weight:400;color:#a92a28;margin-left:8px">Connected with JOCKstrap</span>' if logged_in else ""
         nav = f"""
         <a class="button ghost" href="/ext/jock/orders">Orders</a>
-        <a class="button ghost" href="/ext/jock/notifications">Notifs{badge}</a>
+        {shower_link}
+        <div class="user-dropdown" id="jock-dropdown">
+            <span class="dropdown-toggle button ghost" onclick="event.stopPropagation();document.getElementById('jock-dropdown').classList.toggle('open')">{name} &#9662;</span>
+            <div class="dropdown-menu">
+                <a class="button ghost" href="/ext/jock/notifications">Notifications{badge}</a>
+            </div>
+        </div>
+        <script>
+        ;(function(){{var d=document.getElementById('jock-dropdown');if(d)document.addEventListener('click',function(e){{if(!d.contains(e.target))d.classList.remove('open');}});}})();
+        </script>
         """ if logged_in else ""
         return {
             "ext_jock_logged_in": str(logged_in).lower(),
-            "ext_jock_tag": auth.get("discord_tag", ""),
+            "ext_jock_tag": auth.get("display_name", "") or auth.get("discord_tag", ""),
+            "ext_jock_display_name": auth.get("display_name", ""),
             "ext_jock_guild_verified": auth.get("guild_verified", "0"),
             "ext_jock_roles": auth.get("guild_roles", ""),
             "ext_jock_unread": str(unread),
             "ext_jock_community_url": self.sync_settings.get("community_url", ""),
             "ext_jock_connected": str(logged_in).lower(),
             "_nav_html": nav,
+            "_title_suffix": title_suffix,
         }
 
     def get_settings_html(self):
         auth = self.g.get("ext_jock_auth", {})
         token = auth.get("client_token", "")
         logged_in = bool(token)
-        tag = auth.get("discord_tag", "")
+        tag = auth.get("display_name", "") or auth.get("discord_tag", "")
         roles = auth.get("guild_roles", "")
         verified = auth.get("guild_verified", "0") == "1"
         expires_at = auth.get("expires_at", "")
@@ -163,7 +178,7 @@ class JockStrapExtension(Extension):
 
         login_section = ""
         if logged_in:
-            status_color = "var(--accent)" if verified else "var(--danger)"
+            status_color = "var(--green)" if verified else "var(--danger)"
             status_text = "Verified" if verified else "Not Verified"
             expiry = f" expires {expires_at[:10]}" if expires_at else ""
             token_short = token[:24] + "..." if len(token) > 24 else token
@@ -176,7 +191,7 @@ class JockStrapExtension(Extension):
                 <button type="submit" class="danger-button">Disconnect</button>
             </form>
             <form action="/ext/jock/sync" method="post" style="display:inline;margin-left:8px">
-                <button type="submit">Sync Now</button>
+                <button type="submit" class="button blue">Sync Now</button>
             </form>
             """
         else:
@@ -184,37 +199,93 @@ class JockStrapExtension(Extension):
                 local_url = self.g.get("LOCAL_URL", "http://localhost:9100")
                 callback = urllib.parse.quote(f"{local_url}/ext/jock/callback")
                 login_url = f"{community_url.rstrip('/')}/auth/jock-login?redirect_uri={callback}"
-                login_section = f'<a class="button" href="{login_url}" style="margin-top:8px;display:inline-block">Login with Discord</a>'
+                login_section = f'<a class="button green" href="{login_url}" style="margin-top:8px;display:inline-block">Login with Discord</a>'
             else:
                 login_section = '<p class="subtle" style="color:var(--warning)">Enter the SHOWER server URL above, then click Save, then Login.</p>'
 
-        return f"""
-        <section class="panel">
-            <div class="section-heading"><h2>JOCK Strap</h2></div>
-            <p class="muted" style="font-size:13px">Enter your SHOWER community server URL, then login with Discord. All Discord authentication is handled by the SHOWER server — no Discord client credentials needed here.</p>
+        url_form = ""
+        if logged_in:
+            url_form = f"""
+            <form action="/ext/jock/sync-settings" method="post" id="jock-url-form" style="margin-top:12px">
+                <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--muted)">SHOWER Server URL</label>
+                <div style="display:flex;gap:8px">
+                    <input type="text" name="community_url" value="{esc(community_url)}" placeholder="http://localhost:9200" style="flex:1;font-family:monospace" id="jock-url-input" disabled>
+                    <button type="button" id="jock-change-btn" onclick="jockChange()" class="button blue" style="white-space:nowrap">Change</button>
+                </div>
+            </form>"""
+        else:
+            url_form = f"""
             <form action="/ext/jock/sync-settings" method="post" style="margin-top:12px">
                 <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--muted)">SHOWER Server URL</label>
                 <div style="display:flex;gap:8px">
                     <input type="text" name="community_url" value="{esc(community_url)}" placeholder="http://localhost:9200" style="flex:1;font-family:monospace">
-                    <button type="submit">Save</button>
+                    <button type="submit" class="button green" style="white-space:nowrap">Login with Discord</button>
                 </div>
-            </form>
-            <hr style="border:none;border-top:1px solid var(--line);margin:16px 0">
-            {login_section}
-        </section>
+            </form>"""
+
+        return f"""
         <section class="panel">
-            <div class="section-heading"><h2>Community Sync</h2></div>
-            <form action="/ext/jock/sync-settings" method="post" style="margin-top:8px">
-                <label class="checkbox-label">
-                    <input type="checkbox" name="auto_sync" value="1" {auto_checked}>
-                    Auto-sync inventory changes to community
-                </label>
-                <button type="submit" style="margin-top:8px">Save Sync Settings</button>
-            </form>
-            <div style="margin-top:12px;display:flex;gap:8px">
-                <a class="button ghost" href="/ext/jock/sync-log">Sync Log</a>
+            <div class="section-heading" onclick="toggleSection(this)" style="cursor:pointer">
+                <h2>JOCK Strap <span class="collapse-arrow" style="font-size:12px;margin-left:6px;color:var(--muted)">&#9654;</span></h2>
+            </div>
+            <div class="collapse-content" style="display:none">
+                <p class="muted" style="font-size:13px">Enter your SHOWER community server URL, then click Login. All Discord authentication is handled by the SHOWER server — no Discord client credentials needed here.</p>
+                {url_form}
+                <hr style="border:none;border-top:1px solid var(--line);margin:16px 0">
+                {login_section}
+                <hr style="border:none;border-top:1px solid var(--line);margin:16px 0">
+                <form action="/ext/jock/sync-settings" method="post" style="margin-top:8px">
+                    <label class="checkbox-label">
+                        <input type="checkbox" name="auto_sync" value="1" {auto_checked}>
+                        Auto-sync inventory changes to community
+                    </label>
+                    <button type="submit" style="margin-top:8px">Save Sync Settings</button>
+                </form>
+                <div style="margin-top:12px;display:flex;gap:8px">
+                    <a class="button ghost" href="/ext/jock/sync-log">Sync Log</a>
+                </div>
             </div>
         </section>
+        <script>
+        var JOCK_ORIG_URL = '{esc(community_url)}';
+        function jockChange() {{
+            var input = document.getElementById('jock-url-input');
+            var btn = document.getElementById('jock-change-btn');
+            if (btn.textContent === 'Change') {{
+                input.disabled = false;
+                input.focus();
+                btn.textContent = 'Connect';
+                btn.className = 'button green';
+                var div = btn.parentElement;
+                var cancel = document.createElement('button');
+                cancel.type = 'button';
+                cancel.textContent = 'Cancel';
+                cancel.className = 'button ghost';
+                cancel.onclick = function() {{
+                    input.disabled = true;
+                    input.value = JOCK_ORIG_URL;
+                    btn.textContent = 'Change';
+                    btn.className = 'button blue';
+                    cancel.remove();
+                }};
+                div.appendChild(cancel);
+            }} else {{
+                var form = input.closest('form');
+                form.submit();
+            }}
+        }}
+        function toggleSection(el) {{
+            var content = el.parentElement.querySelector('.collapse-content');
+            var arrow = el.querySelector('.collapse-arrow');
+            if (content.style.display === 'none') {{
+                content.style.display = 'block';
+                arrow.innerHTML = '&#9660;';
+            }} else {{
+                content.style.display = 'none';
+                arrow.innerHTML = '&#9654;';
+            }}
+        }}
+        </script>
         """
 
     def on_route(self, path, qs, data, method):
@@ -232,6 +303,7 @@ class JockStrapExtension(Extension):
             "/ext/jock/orders/create": self._handle_order_create,
             "/ext/jock/orders/fulfill": self._handle_order_fulfill,
             "/ext/jock/orders/mine": self._handle_my_orders,
+            "/ext/jock/push-inventory": self._handle_push_inventory,
         }
         handler = handlers.get(path)
         if not handler:
@@ -273,6 +345,7 @@ class JockStrapExtension(Extension):
     def _handle_callback(self, qs, data, method):
         token = qs.get("token", "")
         discord_tag = qs.get("discord_tag", "")
+        display_name = qs.get("display_name", "")
         discord_id = qs.get("discord_id", "")
         guild_verified = qs.get("guild_verified", "0")
         guild_roles = qs.get("guild_roles", "")
@@ -282,6 +355,7 @@ class JockStrapExtension(Extension):
         auth_data = {
             "client_token": token,
             "discord_tag": discord_tag,
+            "display_name": display_name or discord_tag,
             "discord_id": discord_id,
             "guild_verified": guild_verified,
             "guild_roles": guild_roles,
@@ -326,12 +400,26 @@ class JockStrapExtension(Extension):
         if method != "POST":
             return None, False
         community_url = data.get("community_url", "").strip()
-        if community_url:
-            self.sync_settings["community_url"] = community_url
+        if not community_url:
+            return self._redirect("/settings", "Enter a SHOWER server URL.", "error")
+        auth_data = self.g.get("ext_jock_auth", {})
+        old_token = auth_data.get("client_token", "")
+        old_url = self.sync_settings.get("community_url", "")
+        if old_token and old_url:
+            try:
+                community_api("POST", "auth/revoke", old_url, token=old_token, timeout=5)
+            except Exception:
+                pass
+            save_auth({})
+            self.g["ext_jock_auth"] = {}
+        self.sync_settings["community_url"] = community_url
         if "auto_sync" in data:
             self.sync_settings["auto_sync"] = data.get("auto_sync") == "1"
         save_sync_settings(self.sync_settings)
-        return self._redirect("/settings", "Settings saved.")
+        local_url = self.g.get("LOCAL_URL", "http://localhost:9100")
+        callback = urllib.parse.quote(f"{local_url}/ext/jock/callback")
+        login_url = f"{community_url.rstrip('/')}/auth/jock-login?redirect_uri={callback}"
+        return self._redirect(login_url, "Redirecting to Discord login...")
 
     def _handle_sync_log(self, qs, data, method):
         rows_html = ""
@@ -389,7 +477,7 @@ class JockStrapExtension(Extension):
             orders = []
         rows = ""
         for o in orders[:50]:
-            rows += f"<tr><td>{esc(o.get('item_name',''))}</td><td>{esc(o.get('min_quality',''))}</td><td>{esc(o.get('quantity',''))}</td><td>{esc(o.get('created_by_discord',''))}</td><td><form action='/ext/jock/orders/fulfill' method='post' style='display:inline'><input type='hidden' name='order_id' value='{esc(o.get('id',''))}'><button type='submit'>I Have This</button></form></td></tr>"
+            rows += f"<tr><td>{esc(o.get('item_name',''))}</td><td>{esc(o.get('min_quality',''))}</td><td>{esc(o.get('quantity',''))}</td><td>{esc(o.get('created_by_discord',''))}</td><td><form action='/ext/jock/orders/fulfill' method='post' style='display:inline'><input type='hidden' name='order_id' value='{esc(o.get('id',''))}'><button type='submit' class='button blue'>I Have This</button></form></td></tr>"
         if not rows:
             rows = '<tr><td colspan="5" class="empty">No open order requests.</td></tr>'
         content = f"""<section class="panel">
@@ -468,10 +556,80 @@ class JockStrapExtension(Extension):
         body = self._render_page(content)
         return body, True
 
+    # --- Push Inventory (from SHOWER reverse sync) ---
+    def _handle_push_inventory(self, qs, data, method):
+        if method != "POST":
+            return json.dumps({"status": "error", "error": "POST required"}), True
+        token = data.get("token", "")
+        auth_data = load_auth()
+        if not token or token != auth_data.get("client_token", ""):
+            return json.dumps({"status": "error", "error": "Invalid token"}), True
+        action = data.get("action", "")
+        item_name = data.get("item_name", "").strip()
+        if not item_name:
+            return json.dumps({"status": "error", "error": "Missing item_name"}), True
+        quality = int(data.get("quality", 100))
+        quantity_scu = float(data.get("quantity_scu", 0))
+        station = data.get("station", "").strip()
+        store = self.g["store"]
+        db = store.connect()
+        try:
+            if action == "add":
+                row = db.execute("SELECT id FROM item WHERE name=? ORDER BY id LIMIT 1", (item_name,)).fetchone()
+                if row:
+                    itemid = row[0]
+                else:
+                    store.add_item(db, item_name, None)
+                    itemid = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+                stationid = None
+                if station:
+                    row = db.execute("SELECT id FROM stations WHERE name=? ORDER BY id LIMIT 1", (station,)).fetchone()
+                    if row:
+                        stationid = row[0]
+                    else:
+                        store.add_station(db, station, station, None)
+                        stationid = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+                qty_val = int(round(quantity_scu * 100))
+                store.add_inventory(db, itemid, quality, qty_val, stationid)
+                return json.dumps({"status": "ok"}), True
+            elif action == "delete":
+                row = db.execute("SELECT id FROM item WHERE name=? ORDER BY id LIMIT 1", (item_name,)).fetchone()
+                if not row:
+                    return json.dumps({"status": "error", "error": "Item not found"}), True
+                itemid = row[0]
+                stationid = None
+                if station:
+                    row = db.execute("SELECT id FROM stations WHERE name=? ORDER BY id LIMIT 1", (station,)).fetchone()
+                    if row:
+                        stationid = row[0]
+                qty_val = int(round(quantity_scu * 100))
+                if stationid:
+                    inv = db.execute(
+                        "SELECT id FROM inventory WHERE itemid=? AND qual=? AND qty=? AND stationid=? ORDER BY id LIMIT 1",
+                        (itemid, quality, qty_val, stationid)
+                    ).fetchone()
+                else:
+                    inv = db.execute(
+                        "SELECT id FROM inventory WHERE itemid=? AND qual=? AND qty=? AND stationid IS NULL ORDER BY id LIMIT 1",
+                        (itemid, quality, qty_val)
+                    ).fetchone()
+                if inv:
+                    store.delete_inventory(db, inv[0])
+                    return json.dumps({"status": "ok"}), True
+                else:
+                    return json.dumps({"status": "error", "error": "No matching inventory found"}), True
+            else:
+                return json.dumps({"status": "error", "error": f"Unknown action: {action}"}), True
+        except Exception as e:
+            db.rollback()
+            return json.dumps({"status": "error", "error": str(e)}), True
+        finally:
+            db.close()
+
     # --- helpers ---
     def _render_page(self, content):
         from render import wrap_page
-        return wrap_page(content, local_url=self.g.get("LOCAL_URL", ""), network_url=self.g.get("NETWORK_URL", ""))
+        return wrap_page(content, local_url=self.g.get("LOCAL_URL", ""), network_url=self.g.get("NETWORK_URL", ""), ext_ctx=self.g.get("EXTENSION_CONTEXTS", {}))
 
     def _redirect(self, location, notice="", kind="success"):
         from urllib.parse import urlencode
