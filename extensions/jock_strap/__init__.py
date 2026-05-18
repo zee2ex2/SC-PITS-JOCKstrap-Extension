@@ -5,6 +5,8 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+import websocket
+
 from extensions import Extension
 
 AUTH_FILE = None
@@ -86,13 +88,19 @@ class JockStrapExtension(Extension):
 
     def on_startup(self, g):
         self.g = g
-        g["ext_jock_auth"] = load_auth()
         self.sync_settings = load_sync_settings()
         self._sync_engine = None
+        self._ws = None
+        self._ws_running = False
+        self._ws_connected = False
+        self._user_info = {}
         self._start_sync_engine()
 
+    def _is_connected(self):
+        return self._ws_connected
+
     def _get_token(self):
-        return self.g.get("ext_jock_auth", {}).get("client_token", "")
+        return ""
 
     def _start_sync_engine(self):
         if self._sync_engine:
@@ -106,6 +114,119 @@ class JockStrapExtension(Extension):
         t = threading.Timer(60, poll)
         t.daemon = True
         t.start()
+
+    # --- WebSocket ---
+    def _ws_connect(self, auth_code=None):
+        self._ws_close()
+        community_url = self.sync_settings.get("community_url", "")
+        ws_port = self.sync_settings.get("ws_port", "")
+        token = self._get_token()
+        if not community_url or not ws_port:
+            return
+        if not auth_code and not token:
+            return
+        from urllib.parse import urlparse
+        host = urlparse(community_url).hostname or "localhost"
+        ws_url = f"ws://{host}:{ws_port}"
+
+        def _on_open(ws):
+            if auth_code:
+                ws.send(json.dumps({"type": "auth_code", "code": auth_code}))
+            elif token:
+                ws.send(json.dumps({"type": "auth", "token": token}))
+            else:
+                self._ws_running = False
+
+        def _on_message(ws, message):
+            try:
+                data = json.loads(message)
+                msg_type = data.get("type", "")
+                if msg_type == "push_inventory":
+                    self._handle_ws_push(data)
+                elif msg_type == "auth_ok":
+                    self._ws_connected = True
+                    self._user_info = data.get("user", {})
+                elif msg_type in ("auth_error", "disconnect"):
+                    self._ws_connected = False
+                    self._ws_running = False
+            except Exception:
+                pass
+
+        def _run():
+            self._ws_running = True
+            while self._ws_running:
+                try:
+                    ws = websocket.WebSocketApp(ws_url,
+                        on_open=_on_open,
+                        on_message=_on_message,
+                        on_error=lambda ws, e: setattr(self, '_ws_connected', False),
+                        on_close=lambda ws, *a: setattr(self, '_ws_connected', False))
+                    self._ws = ws
+                    ws.run_forever(ping_interval=30, ping_timeout=10)
+                except Exception:
+                    pass
+                if self._ws_running:
+                    import time
+                    time.sleep(5)
+
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+
+    def _ws_close(self):
+        self._ws_running = False
+        ws = self._ws
+        if ws:
+            try:
+                ws.close()
+            except Exception:
+                pass
+            self._ws = None
+
+    def _ws_send(self, data):
+        ws = self._ws
+        if ws and ws.sock and getattr(ws.sock, 'connected', False):
+            try:
+                ws.send(json.dumps(data))
+                return True
+            except Exception:
+                pass
+        return False
+
+    def _handle_ws_push(self, data):
+        store = self.g["store"]
+        db = store.connect()
+        try:
+            action = data.get("action", "")
+            itemid = data.get("itemid", "")
+            if not itemid:
+                return
+            quality = int(data.get("quality", 100))
+            quantity_scu = float(data.get("quantity_scu", 0))
+            stationid = data.get("stationid", "")
+            row = db.execute("SELECT id FROM item WHERE id=?", (int(itemid),)).fetchone()
+            if not row:
+                return
+            if action == "add":
+                qty_val = int(round(quantity_scu * 100))
+                store.add_inventory(db, int(itemid), quality, qty_val, int(stationid) if stationid else None)
+            elif action == "delete":
+                qty_val = int(round(quantity_scu * 100))
+                if stationid:
+                    inv = db.execute(
+                        "SELECT id FROM inventory WHERE itemid=? AND qual=? AND qty=? AND stationid=? ORDER BY id LIMIT 1",
+                        (int(itemid), quality, qty_val, int(stationid))
+                    ).fetchone()
+                else:
+                    inv = db.execute(
+                        "SELECT id FROM inventory WHERE itemid=? AND qual=? AND qty=? AND stationid IS NULL ORDER BY id LIMIT 1",
+                        (int(itemid), quality, qty_val)
+                    ).fetchone()
+                if inv:
+                    store.delete_inventory(db, inv[0])
+        except Exception:
+            pass
+        finally:
+            db.close()
 
     def _poll_notifications(self):
         community_url = self.sync_settings.get("community_url", "")
@@ -130,17 +251,17 @@ class JockStrapExtension(Extension):
         return sum(1 for n in self._cached_notifs() if not n.get("read"))
 
     def get_context(self):
-        auth = self.g.get("ext_jock_auth", {})
-        logged_in = bool(auth.get("client_token"))
+        logged_in = self._is_connected()
         unread = self._unread_count()
         badge = f'<span class="notif-badge">{unread}</span>' if unread > 0 else ""
-        name = auth.get("display_name", "") or "User"
         community_url = self.sync_settings.get("community_url", "")
-        shower_link = f'<a class="button ghost" href="{esc(community_url)}" target="_blank">ShoWER</a>' if community_url else ""
+        name = self._user_info.get("display_name") or self._user_info.get("username") or "User"
+        shower_link = f'<a class="button ghost" href="{esc(community_url)}" target="_blank" id="jock-shower-link">ShoWER</a>' if community_url else ""
+        theme_script = '<script>(function(){var a=document.getElementById("jock-shower-link");if(a){a.addEventListener("click",function(){var t=localStorage.getItem("theme");if(t)this.href=this.href.split("?")[0]+"?theme="+t;});}})();</script>' if community_url else ""
         title_suffix = '<span style="font-size:11px;font-weight:400;color:#a92a28;margin-left:8px">Connected with JOCKstrap</span>' if logged_in else ""
         nav = f"""
         <a class="button ghost" href="/ext/jock/orders">Orders</a>
-        {shower_link}
+        {shower_link}{theme_script}
         <div class="user-dropdown" id="jock-dropdown">
             <span class="dropdown-toggle button ghost" onclick="event.stopPropagation();document.getElementById('jock-dropdown').classList.toggle('open')">{name} &#9662;</span>
             <div class="dropdown-menu">
@@ -153,47 +274,47 @@ class JockStrapExtension(Extension):
         """ if logged_in else ""
         return {
             "ext_jock_logged_in": str(logged_in).lower(),
-            "ext_jock_tag": auth.get("display_name", "") or auth.get("discord_tag", ""),
-            "ext_jock_display_name": auth.get("display_name", ""),
-            "ext_jock_guild_verified": auth.get("guild_verified", "0"),
-            "ext_jock_roles": auth.get("guild_roles", ""),
+            "ext_jock_tag": self._user_info.get("display_name", "") or self._user_info.get("discord_tag", ""),
+            "ext_jock_display_name": self._user_info.get("display_name", ""),
+            "ext_jock_guild_verified": "1" if logged_in else "0",
+            "ext_jock_roles": "",
             "ext_jock_unread": str(unread),
             "ext_jock_community_url": self.sync_settings.get("community_url", ""),
             "ext_jock_connected": str(logged_in).lower(),
+            "ext_status": "Connected" if logged_in else "Disconnected",
+            "ext_status_cls": "ok" if logged_in else "error",
             "_nav_html": nav,
             "_title_suffix": title_suffix,
         }
+        return {
+            "ext_jock_logged_in": str(logged_in).lower(),
+            "ext_jock_tag": self._user_info.get("display_name", "") or self._user_info.get("discord_tag", ""),
+            "ext_jock_display_name": self._user_info.get("display_name", ""),
+            "ext_jock_guild_verified": "1" if logged_in else "0",
+            "ext_jock_roles": "",
+            "ext_jock_unread": str(unread),
+            "ext_jock_community_url": self.sync_settings.get("community_url", ""),
+            "ext_jock_connected": str(logged_in).lower(),
+            "ext_status": "Connected" if logged_in else "Disconnected",
+            "ext_status_cls": "ok" if logged_in else "error",
+            "_nav_html": nav,
+        }
 
     def get_settings_html(self):
-        auth = self.g.get("ext_jock_auth", {})
-        token = auth.get("client_token", "")
-        logged_in = bool(token)
-        tag = auth.get("display_name", "") or auth.get("discord_tag", "")
-        roles = auth.get("guild_roles", "")
-        verified = auth.get("guild_verified", "0") == "1"
-        expires_at = auth.get("expires_at", "")
+        logged_in = self._is_connected()
+        tag = self._user_info.get("display_name") or self._user_info.get("discord_tag") or ""
         community_url = self.sync_settings.get("community_url", "")
         auto_sync = self.sync_settings.get("auto_sync", True)
         auto_checked = 'checked' if auto_sync else ''
 
         login_section = ""
         if logged_in:
-            status_color = "var(--green)" if verified else "var(--danger)"
-            status_text = "Verified" if verified else "Not Verified"
-            expiry = f" expires {expires_at[:10]}" if expires_at else ""
-            token_short = token[:24] + "..." if len(token) > 24 else token
             login_section = f"""
             <p style="margin:12px 0">Connected as <strong>{esc(tag)}</strong></p>
-            <p style="margin:4px 0;font-size:12px;color:var(--muted)">Token <code>{esc(token_short)}</code>{esc(expiry)}</p>
-            <p style="margin:4px 0">Guild: <span style="color:{status_color}">{status_text}</span></p>
-            <p style="margin:4px 0">Roles: {esc(roles)}</p>
+            <p style="margin:4px 0;font-size:12px;color:var(--muted)">WebSocket connected</p>
             <form action="/ext/jock/logout" method="post" style="display:inline">
                 <button type="submit" class="danger-button">Disconnect</button>
-            </form>
-            <form action="/ext/jock/sync" method="post" style="display:inline;margin-left:8px">
-                <button type="submit" class="button blue">Sync Now</button>
-            </form>
-            """
+            </form>"""
         else:
             if community_url:
                 local_url = self.g.get("LOCAL_URL", "http://localhost:9100")
@@ -229,17 +350,16 @@ class JockStrapExtension(Extension):
                 <h2>JOCK Strap <span class="collapse-arrow" style="font-size:12px;margin-left:6px;color:var(--muted)">&#9654;</span></h2>
             </div>
             <div class="collapse-content" style="display:none">
-                <p class="muted" style="font-size:13px">Enter your SHOWER community server URL, then click Login. All Discord authentication is handled by the SHOWER server — no Discord client credentials needed here.</p>
                 {url_form}
                 <hr style="border:none;border-top:1px solid var(--line);margin:16px 0">
                 {login_section}
                 <hr style="border:none;border-top:1px solid var(--line);margin:16px 0">
-                <form action="/ext/jock/sync-settings" method="post" style="margin-top:8px">
-                    <label class="checkbox-label">
+                <form action="/ext/jock/sync-settings" method="post" style="margin-top:8px;display:flex;align-items:center;gap:12px">
+                    <label class="checkbox-label" style="margin:0">
                         <input type="checkbox" name="auto_sync" value="1" {auto_checked}>
                         Auto-sync inventory changes to community
                     </label>
-                    <button type="submit" style="margin-top:8px">Save Sync Settings</button>
+                    <button type="submit" style="white-space:nowrap">Save Sync Settings</button>
                 </form>
                 <div style="margin-top:12px;display:flex;gap:8px">
                     <a class="button ghost" href="/ext/jock/sync-log">Sync Log</a>
@@ -316,8 +436,8 @@ class JockStrapExtension(Extension):
     def on_inventory_update(self, db, inv_id, data):
         self._auto_sync_inventory(db, "update", data)
 
-    def on_inventory_delete(self, db, inv_id):
-        self._auto_sync_inventory(db, "delete", {"inv_id": str(inv_id)})
+    def on_inventory_delete(self, db, inv_id, item_data=None):
+        self._auto_sync_inventory(db, "delete", item_data or {"inv_id": str(inv_id)})
 
     def _auto_sync_inventory(self, db, action, data):
         if not self.sync_settings.get("auto_sync", False):
@@ -326,75 +446,69 @@ class JockStrapExtension(Extension):
         token = self._get_token()
         if not community_url or not token:
             return
+        itemid = data.get("itemid") or data.get("item_id", "")
+        stationid = data.get("stationid") or data.get("station_id", "")
+        quality = data.get("qual", "")
+        if action == "delete":
+            quantity_scu = float(data.get("qty", 0)) / 100
+        elif data.get("qty_scu"):
+            quantity_scu = data.get("qty_scu", "")
+        else:
+            quantity_scu = float(data.get("qty", 0)) / 100
+        ws_msg = {"type": "sync_inventory", "action": action,
+                  "itemid": itemid, "quality": quality,
+                  "quantity_scu": quantity_scu, "stationid": stationid}
+        if self._ws_send(ws_msg):
+            return
+        # HTTP fallback with names
+        item_name = ""
+        station_name = ""
+        if itemid:
+            row = db.execute("SELECT name FROM item WHERE id=?", (int(itemid),)).fetchone()
+            item_name = row["name"] if row else ""
+        if stationid:
+            row = db.execute("SELECT name FROM stations WHERE id=?", (int(stationid),)).fetchone()
+            station_name = row["name"] if row else ""
         try:
+            body_data = {"item_name": item_name, "quality": quality,
+                         "quantity_scu": quantity_scu, "station": station_name}
             if action == "delete":
-                community_api("DELETE", "inventory/sync", community_url, token=token, body={
-                    "inventory_id": data.get("inv_id", ""),
-                })
+                community_api("DELETE", "inventory/sync", community_url, token=token, body=body_data)
             else:
-                community_api("POST", "inventory/sync", community_url, token=token, body={
-                    "item_name": data.get("item_name", ""),
-                    "quality": data.get("qual", ""),
-                    "quantity_scu": data.get("qty_scu", ""),
-                    "station": data.get("station_name", ""),
-                })
+                community_api("POST", "inventory/sync", community_url, token=token, body=body_data)
         except Exception:
             pass
 
     # --- OAuth ---
     def _handle_callback(self, qs, data, method):
-        token = qs.get("token", "")
-        discord_tag = qs.get("discord_tag", "")
-        display_name = qs.get("display_name", "")
-        discord_id = qs.get("discord_id", "")
-        guild_verified = qs.get("guild_verified", "0")
-        guild_roles = qs.get("guild_roles", "")
-        expires_at = qs.get("expires_at", "")
-        if not token:
-            return self._redirect("/settings", "No token received from SHOWER.", "error")
-        auth_data = {
-            "client_token": token,
-            "discord_tag": discord_tag,
-            "display_name": display_name or discord_tag,
-            "discord_id": discord_id,
-            "guild_verified": guild_verified,
-            "guild_roles": guild_roles,
-            "expires_at": expires_at,
-        }
-        save_auth(auth_data)
-        self.g["ext_jock_auth"] = auth_data
+        code = qs.get("code", "")
+        ws_port = qs.get("ws_port", "")
+        if not code:
+            return self._redirect("/settings", "No auth code received from SHOWER.", "error")
+        self.sync_settings["ws_port"] = ws_port
+        save_sync_settings(self.sync_settings)
+        self._ws_connect(auth_code=code)
+        import time
+        for _ in range(50):
+            if self._is_connected():
+                break
+            time.sleep(0.1)
         return self._redirect("/settings", "Connected to SHOWER!")
 
     # --- Logout ---
     def _handle_logout(self, qs, data, method):
         if method != "POST":
             return None, False
-        auth_data = self.g.get("ext_jock_auth", {})
-        token = auth_data.get("client_token", "")
-        community_url = self.sync_settings.get("community_url", "")
-        if token and community_url:
-            try:
-                community_api("POST", "auth/revoke", community_url, token=token, timeout=5)
-            except Exception:
-                pass
-        save_auth({})
-        self.g["ext_jock_auth"] = {}
+        self._ws_close()
         return self._redirect("/settings", "Disconnected.")
 
     # --- Sync ---
     def _handle_sync(self, qs, data, method):
         if method != "POST":
             return None, False
-        community_url = self.sync_settings.get("community_url", "")
-        token = self._get_token()
-        if not community_url:
-            return self._redirect("/settings", "Community URL not set.", "error")
-        if not token:
+        if not self._is_connected():
             return self._redirect("/settings", "Not connected to SHOWER. Login with Discord first.", "error")
-        resp, err = community_api("GET", "inventory/sync", community_url, token=token)
-        if err:
-            return self._redirect("/settings", f"Sync failed: {err}", "error")
-        return self._redirect("/settings", "Sync complete.")
+        return self._redirect("/settings", "Sync will happen automatically via WebSocket.")
 
     def _handle_sync_settings(self, qs, data, method):
         if method != "POST":
@@ -402,16 +516,7 @@ class JockStrapExtension(Extension):
         community_url = data.get("community_url", "").strip()
         if not community_url:
             return self._redirect("/settings", "Enter a SHOWER server URL.", "error")
-        auth_data = self.g.get("ext_jock_auth", {})
-        old_token = auth_data.get("client_token", "")
-        old_url = self.sync_settings.get("community_url", "")
-        if old_token and old_url:
-            try:
-                community_api("POST", "auth/revoke", old_url, token=old_token, timeout=5)
-            except Exception:
-                pass
-            save_auth({})
-            self.g["ext_jock_auth"] = {}
+        self._ws_close()
         self.sync_settings["community_url"] = community_url
         if "auto_sync" in data:
             self.sync_settings["auto_sync"] = data.get("auto_sync") == "1"
