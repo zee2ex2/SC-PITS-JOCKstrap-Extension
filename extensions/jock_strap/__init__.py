@@ -7,6 +7,10 @@ from pathlib import Path
 
 import websocket
 
+# Fix websocket-client v1.9.0 GUID bug
+import websocket._handshake as _ws_hs
+_ws_hs._GUID = "258EAFA5-E914-47DA-95CA-5AB5DC11B735"
+
 from extensions import Extension
 
 AUTH_FILE = None
