@@ -461,8 +461,10 @@ class JockStrapExtension(Extension):
         else:
             quantity_scu = float(data.get("qty", 0)) / 100
         ws_msg = {"type": "sync_inventory", "action": action,
-                  "itemid": itemid, "quality": quality,
-                  "quantity_scu": quantity_scu, "stationid": stationid}
+                  "itemid": itemid, "item_name": item_name,
+                  "quality": quality,
+                  "quantity_scu": quantity_scu,
+                  "stationid": stationid, "station": station}
         if self._ws_send(ws_msg):
             return
         # HTTP fallback with names
