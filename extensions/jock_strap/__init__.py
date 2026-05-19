@@ -85,6 +85,7 @@ def esc(val):
 class JockStrapExtension(Extension):
     name = "jock_strap"
     version = "1.0"
+    repo_url = "zee2ex2/SC-PITS-JOCKstrap-Extension"
     description = "JOCK Strap — Discord OAuth via SHOWER, community sync, orders, notifications"
 
     def on_startup(self, g):
@@ -448,8 +449,7 @@ class JockStrapExtension(Extension):
         if not self.sync_settings.get("auto_sync", False):
             return
         community_url = self.sync_settings.get("community_url", "")
-        token = self._get_token()
-        if not community_url or not token:
+        if not community_url:
             return
         itemid = data.get("itemid") or data.get("item_id", "")
         stationid = data.get("stationid") or data.get("station_id", "")
@@ -461,10 +461,8 @@ class JockStrapExtension(Extension):
         else:
             quantity_scu = float(data.get("qty", 0)) / 100
         ws_msg = {"type": "sync_inventory", "action": action,
-                  "itemid": itemid, "item_name": item_name,
-                  "quality": quality,
-                  "quantity_scu": quantity_scu,
-                  "stationid": stationid, "station": station}
+                  "itemid": itemid, "quality": quality,
+                  "quantity_scu": quantity_scu, "stationid": stationid}
         if self._ws_send(ws_msg):
             return
         # HTTP fallback with names
