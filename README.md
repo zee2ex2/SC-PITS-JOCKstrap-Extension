@@ -1,10 +1,10 @@
-# JOCK Strap
+# JOCKstrap
 
-JOCK Strap is a PITS extension that connects your local inventory to a SHOWER community server for real-time sync.
+JOCKstrap is a PITS extension that connects your local inventory to a Community ShoWER server for real-time sync.
 
 ## Features
 
-- Discord OAuth via SHOWER (no local Discord tokens)
+- Discord OAuth via Community ShoWER (no local Discord tokens)
 - Real-time inventory sync via WebSocket
 - Bidirectional: local changes sync to community, community changes sync back
 - Quantity merge on duplicate entries
@@ -13,7 +13,7 @@ JOCK Strap is a PITS extension that connects your local inventory to a SHOWER co
 
 ## Installation
 
-1. Download `JOCKstrap_v1.0.zip` from the [Releases page](https://github.com/zee2ex2/SC-PITS-JOCKstrap-Extension/releases)
+1. Download `JOCKstrap_v1.1.zip` from the [Releases page](https://github.com/zee2ex2/SC-PITS-JOCKstrap-Extension/releases)
 2. In PITS, go to **Settings → Manage Extensions → Install New Extension**
 3. Select the ZIP file
 4. The extension will appear in the extensions list
@@ -21,15 +21,15 @@ JOCK Strap is a PITS extension that connects your local inventory to a SHOWER co
 ## Configuration
 
 1. Open PITS **Settings**
-2. Find the **JOCK Strap** section
-3. Enter your SHOWER server URL
+2. Find the **JOCKstrap** section
+3. Enter your Community ShoWER server URL
 4. Click **Save** then **Login with Discord**
 5. Once connected, enable **Auto-sync inventory changes to community**
 
 ## Requirements
 
-- PITS v0.3.0 or later
-- SHOWER server with WebSocket enabled
+- PITS v0.4.0 or later
+- Community ShoWER server with WebSocket enabled
 - Discord account with access to the guild
 
 ## License
