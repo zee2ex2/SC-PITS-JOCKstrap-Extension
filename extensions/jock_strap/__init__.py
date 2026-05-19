@@ -511,10 +511,11 @@ class JockStrapExtension(Extension):
             return self._redirect("/settings", "No auth code received from SHOWER.", "error")
         self._ws_connect(auth_code=code)
         import time
-        for _ in range(50):
+        for _ in range(150):
             if self._is_connected():
                 return self._redirect("/settings", "Connected to SHOWER!")
             time.sleep(0.1)
+        print("[jock] WS connection timeout - check network/SSL", flush=True)
         return self._redirect("/settings", "Connected to SHOWER but WebSocket connection failed. Check that the SHOWER server is reachable.", "error")
 
     # --- Logout ---
