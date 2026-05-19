@@ -14,9 +14,13 @@ import websocket._handshake as _ws_hs
 import hashlib, base64
 _orig_handshake = _ws_core.handshake
 def _patched_handshake(sock, url, *addrs, **options):
+    from urllib.parse import urlparse
     from websocket._http import read_headers
     from websocket._handshake import _get_handshake_headers, handshake_response
-    headers_raw, key = _get_handshake_headers(url, url, addrs[0] if addrs else None, None, options)
+    parsed = urlparse(url)
+    host = addrs[0] if addrs else parsed.hostname
+    port = addrs[1] if len(addrs) > 1 else (parsed.port or (443 if parsed.scheme == 'wss' else 80))
+    headers_raw, key = _get_handshake_headers(url, url, host, port, options)
     header_lines = [h[0] if isinstance(h, list) else str(h) for h in headers_raw]
     from websocket._socket import send
     send(sock, "\r\n".join(header_lines))
