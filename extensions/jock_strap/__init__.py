@@ -453,19 +453,6 @@ class JockStrapExtension(Extension):
             return
         itemid = data.get("itemid") or data.get("item_id", "")
         stationid = data.get("stationid") or data.get("station_id", "")
-        quality = data.get("qual", "")
-        if action == "delete":
-            quantity_scu = float(data.get("qty", 0)) / 100
-        elif data.get("qty_scu"):
-            quantity_scu = data.get("qty_scu", "")
-        else:
-            quantity_scu = float(data.get("qty", 0)) / 100
-        ws_msg = {"type": "sync_inventory", "action": action,
-                  "itemid": itemid, "quality": quality,
-                  "quantity_scu": quantity_scu, "stationid": stationid}
-        if self._ws_send(ws_msg):
-            return
-        # HTTP fallback with names
         item_name = ""
         station_name = ""
         if itemid:
@@ -474,6 +461,21 @@ class JockStrapExtension(Extension):
         if stationid:
             row = db.execute("SELECT name FROM stations WHERE id=?", (int(stationid),)).fetchone()
             station_name = row["name"] if row else ""
+        quality = data.get("qual", "")
+        if action == "delete":
+            quantity_scu = float(data.get("qty", 0)) / 100
+        elif data.get("qty_scu"):
+            quantity_scu = data.get("qty_scu", "")
+        else:
+            quantity_scu = float(data.get("qty", 0)) / 100
+        ws_msg = {"type": "sync_inventory", "action": action,
+                  "itemid": itemid, "item_name": item_name,
+                  "quality": quality,
+                  "quantity_scu": quantity_scu,
+                  "stationid": stationid, "station": station_name}
+        if self._ws_send(ws_msg):
+            return
+        # HTTP fallback with names
         try:
             body_data = {"item_name": item_name, "quality": quality,
                          "quantity_scu": quantity_scu, "station": station_name}
