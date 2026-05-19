@@ -25,6 +25,7 @@ def _patched_handshake(sock, url, *addrs, **options):
     from websocket._socket import send
     send(sock, "\r\n".join(header_lines))
     status, resp, msg = read_headers(sock)
+    print(f"[jock] WS handshake status={status} host={host} port={port}", flush=True)
     return handshake_response(status, resp, None)
 _ws_core.handshake = _patched_handshake
 
