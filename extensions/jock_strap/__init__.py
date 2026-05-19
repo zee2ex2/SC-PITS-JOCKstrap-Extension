@@ -25,7 +25,6 @@ def _patched_handshake(sock, url, *addrs, **options):
     from websocket._socket import send
     send(sock, "\r\n".join(header_lines))
     status, resp, msg = read_headers(sock)
-    print(f"[jock] WS handshake status={status} host={host} port={port}", flush=True)
     return handshake_response(status, resp, None)
 _ws_core.handshake = _patched_handshake
 
@@ -512,11 +511,10 @@ class JockStrapExtension(Extension):
             return self._redirect("/settings", "No auth code received from SHOWER.", "error")
         self._ws_connect(auth_code=code)
         import time
-        for _ in range(150):
+        for _ in range(50):
             if self._is_connected():
                 return self._redirect("/settings", "Connected to SHOWER!")
             time.sleep(0.1)
-        print("[jock] WS connection timeout - check network/SSL", flush=True)
         return self._redirect("/settings", "Connected to SHOWER but WebSocket connection failed. Check that the SHOWER server is reachable.", "error")
 
     # --- Logout ---
