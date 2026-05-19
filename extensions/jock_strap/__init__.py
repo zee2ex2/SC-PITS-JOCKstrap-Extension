@@ -123,15 +123,18 @@ class JockStrapExtension(Extension):
     def _ws_connect(self, auth_code=None):
         self._ws_close()
         community_url = self.sync_settings.get("community_url", "")
-        ws_port = self.sync_settings.get("ws_port", "")
         token = self._get_token()
-        if not community_url or not ws_port:
+        if not community_url:
             return
         if not auth_code and not token:
             return
         from urllib.parse import urlparse
-        host = urlparse(community_url).hostname or "localhost"
-        ws_url = f"ws://{host}:{ws_port}"
+        parsed = urlparse(community_url)
+        host = parsed.hostname or "localhost"
+        is_secure = parsed.scheme == "https"
+        ws_scheme = "wss" if is_secure else "ws"
+        ws_port = parsed.port or (443 if is_secure else 9200)
+        ws_url = f"{ws_scheme}://{host}:{ws_port}"
 
         def _on_open(ws):
             if auth_code:
@@ -486,11 +489,8 @@ class JockStrapExtension(Extension):
     # --- OAuth ---
     def _handle_callback(self, qs, data, method):
         code = qs.get("code", "")
-        ws_port = qs.get("ws_port", "")
         if not code:
             return self._redirect("/settings", "No auth code received from SHOWER.", "error")
-        self.sync_settings["ws_port"] = ws_port
-        save_sync_settings(self.sync_settings)
         self._ws_connect(auth_code=code)
         import time
         for _ in range(50):
