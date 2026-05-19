@@ -495,9 +495,9 @@ class JockStrapExtension(Extension):
         import time
         for _ in range(50):
             if self._is_connected():
-                break
+                return self._redirect("/settings", "Connected to SHOWER!")
             time.sleep(0.1)
-        return self._redirect("/settings", "Connected to SHOWER!")
+        return self._redirect("/settings", "Connected to SHOWER but WebSocket connection failed. Check that the SHOWER server is reachable.", "error")
 
     # --- Logout ---
     def _handle_logout(self, qs, data, method):
