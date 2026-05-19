@@ -10,7 +10,7 @@ import websocket
 
 # Fix websocket-client v1.9.0 GUID bug in handshake validation
 import websocket._handshake as _ws_hs
-import hmac, hashlib
+import hmac, hashlib, base64
 from websocket._handshake import _HEADERS_TO_CHECK as _WS_HEADERS
 _orig_validate = _ws_hs._validate
 def _patched_validate(headers, key, subprotocols):
@@ -32,12 +32,9 @@ def _patched_validate(headers, key, subprotocols):
     result = result.lower()
     if isinstance(result, str):
         result = result.encode("utf-8")
-    correct_guid = "258EAFA5-E914-47DA-95CA-5AB5DC11B735"
-    value = f"{key}{correct_guid}".encode("utf-8")
-    hashed = hashlib.sha1(value).digest()
-    import base64
-    expected = base64.b64encode(hashed).strip().lower()
-    if hmac.compare_digest(expected, result):
+    value = f"{key}258EAFA5-E914-47DA-95CA-5AB5DC11B735".encode("utf-8")
+    hashed = base64.b64encode(hashlib.sha1(value).digest()).strip().lower()
+    if hmac.compare_digest(hashed, result):
         return True, subproto
     return False, None
 _ws_hs._validate = _patched_validate
