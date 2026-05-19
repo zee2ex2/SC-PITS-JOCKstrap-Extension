@@ -9,35 +9,20 @@ from pathlib import Path
 import websocket
 
 # Fix websocket-client v1.9.0 GUID bug in handshake validation
+import websocket._core as _ws_core
 import websocket._handshake as _ws_hs
-import hmac, hashlib, base64
-from websocket._handshake import _HEADERS_TO_CHECK as _WS_HEADERS
-_orig_validate = _ws_hs._validate
-def _patched_validate(headers, key, subprotocols):
-    for k, v in _WS_HEADERS.items():
-        r = headers.get(k, None)
-        if not r:
-            return False, None
-        r = [x.strip().lower() for x in r.split(",")]
-        if v not in r:
-            return False, None
-    if subprotocols:
-        subproto = headers.get("sec-websocket-protocol", None)
-        if not subproto or subproto.lower() not in [s.lower() for s in subprotocols]:
-            return False, None
-        subproto = subproto.lower()
-    result = headers.get("sec-websocket-accept", None)
-    if not result:
-        return False, None
-    result = result.lower()
-    if isinstance(result, str):
-        result = result.encode("utf-8")
-    value = f"{key}258EAFA5-E914-47DA-95CA-5AB5DC11B735".encode("utf-8")
-    hashed = base64.b64encode(hashlib.sha1(value).digest()).strip().lower()
-    if hmac.compare_digest(hashed, result):
-        return True, subproto
-    return False, None
-_ws_hs._validate = _patched_validate
+import hashlib, base64
+_orig_handshake = _ws_core.handshake
+def _patched_handshake(sock, url, *addrs, **options):
+    from websocket._http import read_headers
+    from websocket._handshake import _get_handshake_headers, handshake_response
+    headers_raw, key = _get_handshake_headers(url, url, addrs[0] if addrs else None, None, options)
+    header_lines = [h[0] if isinstance(h, list) else str(h) for h in headers_raw]
+    from websocket._socket import send
+    send(sock, "\r\n".join(header_lines))
+    status, resp, msg = read_headers(sock)
+    return handshake_response(status, resp, None)
+_ws_core.handshake = _patched_handshake
 
 from extensions import Extension
 
