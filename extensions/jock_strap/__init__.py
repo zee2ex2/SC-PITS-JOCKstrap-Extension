@@ -84,7 +84,7 @@ def esc(val):
 
 class JockStrapExtension(Extension):
     name = "jock_strap"
-    version = "1.0"
+    version = "1.1"
     repo_url = "zee2ex2/SC-PITS-JOCKstrap-Extension"
     description = "JOCK Strap — Discord OAuth via SHOWER, community sync, orders, notifications"
 
