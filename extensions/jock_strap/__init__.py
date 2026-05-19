@@ -1,5 +1,6 @@
 import json
 import os
+import ssl
 import threading
 import urllib.parse
 import urllib.request
@@ -7,9 +8,39 @@ from pathlib import Path
 
 import websocket
 
-# Fix websocket-client v1.9.0 GUID bug
+# Fix websocket-client v1.9.0 GUID bug in handshake validation
 import websocket._handshake as _ws_hs
-_ws_hs._GUID = "258EAFA5-E914-47DA-95CA-5AB5DC11B735"
+import hmac, hashlib
+from websocket._handshake import _HEADERS_TO_CHECK as _WS_HEADERS
+_orig_validate = _ws_hs._validate
+def _patched_validate(headers, key, subprotocols):
+    for k, v in _WS_HEADERS.items():
+        r = headers.get(k, None)
+        if not r:
+            return False, None
+        r = [x.strip().lower() for x in r.split(",")]
+        if v not in r:
+            return False, None
+    if subprotocols:
+        subproto = headers.get("sec-websocket-protocol", None)
+        if not subproto or subproto.lower() not in [s.lower() for s in subprotocols]:
+            return False, None
+        subproto = subproto.lower()
+    result = headers.get("sec-websocket-accept", None)
+    if not result:
+        return False, None
+    result = result.lower()
+    if isinstance(result, str):
+        result = result.encode("utf-8")
+    correct_guid = "258EAFA5-E914-47DA-95CA-5AB5DC11B735"
+    value = f"{key}{correct_guid}".encode("utf-8")
+    hashed = hashlib.sha1(value).digest()
+    import base64
+    expected = base64.b64encode(hashed).strip().lower()
+    if hmac.compare_digest(expected, result):
+        return True, subproto
+    return False, None
+_ws_hs._validate = _patched_validate
 
 from extensions import Extension
 
@@ -169,7 +200,8 @@ class JockStrapExtension(Extension):
                         on_error=lambda ws, e: setattr(self, '_ws_connected', False),
                         on_close=lambda ws, *a: setattr(self, '_ws_connected', False))
                     self._ws = ws
-                    ws.run_forever(ping_interval=30, ping_timeout=10)
+                    ws.run_forever(ping_interval=30, ping_timeout=10,
+                                   sslopt={"cert_reqs": ssl.CERT_NONE} if is_secure else None)
                 except Exception:
                     pass
                 if self._ws_running:
