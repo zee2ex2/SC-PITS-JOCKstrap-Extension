@@ -1,5 +1,7 @@
 # JOCKstrap
 
+**J**oin **O**rganization - **C**onnection2Sho**W**E**R** **K**eeper **Strap** Extension
+
 JOCKstrap is a PITS extension that connects your local inventory to a Community ShoWER server for real-time sync.
 
 ## Features
