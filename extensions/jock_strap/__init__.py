@@ -89,6 +89,10 @@ class JockStrapExtension(Extension):
     repo_url = "zee2ex2/SC-PITS-JOCKstrap-Extension"
     description = "JOCK Strap — Discord OAuth via SHOWER, community sync, orders, notifications"
 
+    def _set_notice(self, msg, kind="success"):
+        self._notice = msg
+        self._notice_kind = kind
+
     def on_startup(self, g):
         self.g = g
         self.sync_settings = load_sync_settings()
@@ -99,6 +103,8 @@ class JockStrapExtension(Extension):
         self._user_info = {}
         self._version_error = ""
         self._update_url = ""
+        self._notice = ""
+        self._notice_kind = ""
         self._start_sync_engine()
 
     def _is_connected(self):
@@ -375,12 +381,20 @@ class JockStrapExtension(Extension):
                 </div>
             </form>"""
 
+        notice_html = ""
+        if self._notice:
+            notice_cls = "success" if self._notice_kind == "success" else "error"
+            notice_html = f'<div class="messages"><div class="message {notice_cls}">{esc(self._notice)}</div></div>'
+            self._notice = ""
+            self._notice_kind = ""
+
         return f"""
         <section class="panel">
             <div class="section-heading" onclick="toggleSection(this)" style="cursor:pointer">
                 <h2>JOCK Strap <span class="collapse-arrow" style="font-size:12px;margin-left:6px;color:var(--muted)">&#9654;</span></h2>
             </div>
             <div class="collapse-content" style="display:none">
+                {notice_html}
                 {url_form}
                 <hr style="border:none;border-top:1px solid var(--line);margin:16px 0">
                 {login_section}
@@ -515,39 +529,45 @@ class JockStrapExtension(Extension):
     def _handle_callback(self, qs, data, method):
         code = qs.get("code", "")
         if not code:
-            return self._redirect("/settings", "No auth code received from SHOWER.", "error")
+            self._version_error = "No auth code received from SHOWER."
+            return self._redirect("/settings")
         self._version_error = ""
         self._update_url = ""
         self._ws_connect(auth_code=code)
         import time
         for _ in range(50):
             if self._is_connected():
-                return self._redirect("/settings", "Connected to SHOWER!")
+                return self._redirect("/settings")
             time.sleep(0.1)
-        err = self._version_error or "WebSocket connection failed. Check that the SHOWER server is reachable."
-        return self._redirect("/settings", err, "error")
+        if not self._version_error:
+            self._version_error = "WebSocket connection failed. Check that the SHOWER server is reachable."
+        return self._redirect("/settings")
 
     # --- Logout ---
     def _handle_logout(self, qs, data, method):
         if method != "POST":
             return None, False
         self._ws_close()
-        return self._redirect("/settings", "Disconnected.")
+        self._set_notice("Disconnected.")
+        return self._redirect("/settings")
 
     # --- Sync ---
     def _handle_sync(self, qs, data, method):
         if method != "POST":
             return None, False
         if not self._is_connected():
-            return self._redirect("/settings", "Not connected to SHOWER. Login with Discord first.", "error")
-        return self._redirect("/settings", "Sync will happen automatically via WebSocket.")
+            self._set_notice("Not connected to SHOWER. Login with Discord first.", "error")
+            return self._redirect("/settings")
+        self._set_notice("Sync will happen automatically via WebSocket.")
+        return self._redirect("/settings")
 
     def _handle_sync_settings(self, qs, data, method):
         if method != "POST":
             return None, False
         community_url = data.get("community_url", "").strip()
         if not community_url:
-            return self._redirect("/settings", "Enter a SHOWER server URL.", "error")
+            self._set_notice("Enter a SHOWER server URL.", "error")
+            return self._redirect("/settings")
         self._ws_close()
         self.sync_settings["community_url"] = community_url
         if "auto_sync" in data:
@@ -556,7 +576,8 @@ class JockStrapExtension(Extension):
         local_url = self.g.get("LOCAL_URL", "http://localhost:9100")
         callback = urllib.parse.quote(f"{local_url}/ext/jock/callback")
         login_url = f"{community_url.rstrip('/')}/auth/jock-login?redirect_uri={callback}"
-        return self._redirect(login_url, "Redirecting to Discord login...")
+        self._set_notice("Redirecting to Discord login...")
+        return self._redirect(login_url)
 
     def _handle_sync_log(self, qs, data, method):
         rows_html = ""
@@ -601,7 +622,8 @@ class JockStrapExtension(Extension):
     def _handle_notification_read(self, qs, data, method):
         if method != "POST":
             return None, False
-        return self._redirect("/ext/jock/notifications", "Marked as read.")
+        self._set_notice("Marked as read.")
+        return self._redirect("/ext/jock/notifications")
 
     # --- Orders ---
     def _handle_orders(self, qs, data, method):
@@ -640,9 +662,12 @@ class JockStrapExtension(Extension):
                     "min_quality": int(min_quality), "quantity": int(quantity), "notes": notes,
                 })
                 if err:
-                    return self._redirect("/ext/jock/orders/create", f"Failed: {err}", "error")
-                return self._redirect("/ext/jock/orders", "Order request created.")
-            return self._redirect("/ext/jock/orders/create", "Not connected to SHOWER.", "error")
+                    self._set_notice(f"Failed: {err}", "error")
+                    return self._redirect("/ext/jock/orders/create")
+                self._set_notice("Order request created.")
+                return self._redirect("/ext/jock/orders")
+            self._set_notice("Not connected to SHOWER.", "error")
+            return self._redirect("/ext/jock/orders/create")
         form = """<form method="post" action="/ext/jock/orders/create" class="inline-form" style="flex-direction:column;align-items:stretch">
         <input type="text" name="item_name" placeholder="Item name" required>
         <input type="number" name="min_quality" placeholder="Minimum quality" min="1" max="1000" value="1" required>
@@ -668,9 +693,12 @@ class JockStrapExtension(Extension):
                 "order_id": order_id,
             })
             if err:
-                return self._redirect("/ext/jock/orders", f"Failed: {err}", "error")
-            return self._redirect("/ext/jock/orders", "Notification sent to requester!")
-        return self._redirect("/ext/jock/orders", "Not connected.", "error")
+                self._set_notice(f"Failed: {err}", "error")
+                return self._redirect("/ext/jock/orders")
+            self._set_notice("Notification sent to requester!")
+            return self._redirect("/ext/jock/orders")
+        self._set_notice("Not connected.", "error")
+        return self._redirect("/ext/jock/orders")
 
     def _handle_my_orders(self, qs, data, method):
         community_url = self.sync_settings.get("community_url", "")
