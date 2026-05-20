@@ -84,7 +84,8 @@ def esc(val):
 
 class JockStrapExtension(Extension):
     name = "jock_strap"
-    version = "1.1"
+    version = "1.2.0"
+    JOCK_DB_SCHEMA = 2
     repo_url = "zee2ex2/SC-PITS-JOCKstrap-Extension"
     description = "JOCK Strap — Discord OAuth via SHOWER, community sync, orders, notifications"
 
@@ -96,6 +97,8 @@ class JockStrapExtension(Extension):
         self._ws_running = False
         self._ws_connected = False
         self._user_info = {}
+        self._version_error = ""
+        self._update_url = ""
         self._start_sync_engine()
 
     def _is_connected(self):
@@ -136,9 +139,13 @@ class JockStrapExtension(Extension):
 
         def _on_open(ws):
             if auth_code:
-                ws.send(json.dumps({"type": "auth_code", "code": auth_code}))
+                ws.send(json.dumps({"type": "auth_code", "code": auth_code,
+                                    "jock_version": self.version,
+                                    "jock_db_schema": self.JOCK_DB_SCHEMA}))
             elif token:
-                ws.send(json.dumps({"type": "auth", "token": token}))
+                ws.send(json.dumps({"type": "auth", "token": token,
+                                    "jock_version": self.version,
+                                    "jock_db_schema": self.JOCK_DB_SCHEMA}))
             else:
                 self._ws_running = False
 
@@ -152,8 +159,12 @@ class JockStrapExtension(Extension):
                     self._ws_connected = True
                     self._user_info = data.get("user", {})
                 elif msg_type in ("auth_error", "disconnect"):
+                    err = data.get("error", "")
                     self._ws_connected = False
                     self._ws_running = False
+                    if "too old" in err or "update" in err.lower():
+                        self._version_error = err
+                        self._update_url = data.get("update_url", "")
             except Exception:
                 pass
 
@@ -313,8 +324,21 @@ class JockStrapExtension(Extension):
         auto_sync = self.sync_settings.get("auto_sync", True)
         auto_checked = 'checked' if auto_sync else ''
 
+        version_error = self._version_error
         login_section = ""
-        if logged_in:
+        if version_error:
+            update_link = ""
+            if self._update_url:
+                update_link = f' <a href="{esc(self._update_url)}" target="_blank" style="color:var(--blue)">Download update</a>'
+            login_section = f"""
+            <div class="message error" style="margin:8px 0;padding:8px;background:var(--danger-bg);border-radius:6px">
+                <strong>Connection failed:</strong> {esc(version_error)}{update_link}
+            </div>
+            <form action="/ext/jock/sync-settings" method="post" style="display:inline">
+                <input type="hidden" name="community_url" value="{esc(community_url)}">
+                <button type="submit" class="button blue">Retry</button>
+            </form>"""
+        elif logged_in:
             login_section = f"""
             <p style="margin:12px 0">Connected as <strong>{esc(tag)}</strong></p>
             <p style="margin:4px 0;font-size:12px;color:var(--muted)">WebSocket connected</p>
@@ -469,10 +493,10 @@ class JockStrapExtension(Extension):
         else:
             quantity_scu = float(data.get("qty", 0)) / 100
         ws_msg = {"type": "sync_inventory", "action": action,
-                  "itemid": itemid, "item_name": item_name,
+                  "itemid": itemid,
                   "quality": quality,
                   "quantity_scu": quantity_scu,
-                  "stationid": stationid, "station": station_name}
+                  "stationid": stationid}
         if self._ws_send(ws_msg):
             return
         # HTTP fallback with names
@@ -674,53 +698,46 @@ class JockStrapExtension(Extension):
         if not token or token != auth_data.get("client_token", ""):
             return json.dumps({"status": "error", "error": "Invalid token"}), True
         action = data.get("action", "")
-        item_name = data.get("item_name", "").strip()
-        if not item_name:
-            return json.dumps({"status": "error", "error": "Missing item_name"}), True
+        itemid = data.get("itemid", "")
+        if not itemid:
+            return json.dumps({"status": "error", "error": "Missing itemid"}), True
         quality = int(data.get("quality", 100))
         quantity_scu = float(data.get("quantity_scu", 0))
-        station = data.get("station", "").strip()
+        stationid = data.get("stationid", "")
         store = self.g["store"]
         db = store.connect()
         try:
             if action == "add":
-                row = db.execute("SELECT id FROM item WHERE name=? ORDER BY id LIMIT 1", (item_name,)).fetchone()
-                if row:
-                    itemid = row[0]
-                else:
-                    store.add_item(db, item_name, None)
-                    itemid = db.execute("SELECT last_insert_rowid()").fetchone()[0]
-                stationid = None
-                if station:
-                    row = db.execute("SELECT id FROM stations WHERE name=? ORDER BY id LIMIT 1", (station,)).fetchone()
-                    if row:
-                        stationid = row[0]
-                    else:
-                        store.add_station(db, station, station, None)
-                        stationid = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+                row = db.execute("SELECT id FROM item WHERE id=? ORDER BY id LIMIT 1", (int(itemid),)).fetchone()
+                if not row:
+                    return json.dumps({"status": "error", "error": "Item ID not found"}), True
+                sid = int(stationid) if stationid else None
+                if stationid:
+                    row = db.execute("SELECT id FROM stations WHERE id=? ORDER BY id LIMIT 1", (int(stationid),)).fetchone()
+                    if not row:
+                        return json.dumps({"status": "error", "error": "Station ID not found"}), True
                 qty_val = int(round(quantity_scu * 100))
-                store.add_inventory(db, itemid, quality, qty_val, stationid)
+                store.add_inventory(db, int(itemid), quality, qty_val, sid)
                 return json.dumps({"status": "ok"}), True
             elif action == "delete":
-                row = db.execute("SELECT id FROM item WHERE name=? ORDER BY id LIMIT 1", (item_name,)).fetchone()
+                row = db.execute("SELECT id FROM item WHERE id=? ORDER BY id LIMIT 1", (int(itemid),)).fetchone()
                 if not row:
-                    return json.dumps({"status": "error", "error": "Item not found"}), True
-                itemid = row[0]
-                stationid = None
-                if station:
-                    row = db.execute("SELECT id FROM stations WHERE name=? ORDER BY id LIMIT 1", (station,)).fetchone()
-                    if row:
-                        stationid = row[0]
-                qty_val = int(round(quantity_scu * 100))
+                    return json.dumps({"status": "error", "error": "Item ID not found"}), True
+                sid = int(stationid) if stationid else None
                 if stationid:
+                    row = db.execute("SELECT id FROM stations WHERE id=? ORDER BY id LIMIT 1", (int(stationid),)).fetchone()
+                    if not row:
+                        return json.dumps({"status": "error", "error": "Station ID not found"}), True
+                qty_val = int(round(quantity_scu * 100))
+                if sid:
                     inv = db.execute(
                         "SELECT id FROM inventory WHERE itemid=? AND qual=? AND qty=? AND stationid=? ORDER BY id LIMIT 1",
-                        (itemid, quality, qty_val, stationid)
+                        (int(itemid), quality, qty_val, sid)
                     ).fetchone()
                 else:
                     inv = db.execute(
                         "SELECT id FROM inventory WHERE itemid=? AND qual=? AND qty=? AND stationid IS NULL ORDER BY id LIMIT 1",
-                        (itemid, quality, qty_val)
+                        (int(itemid), quality, qty_val)
                     ).fetchone()
                 if inv:
                     store.delete_inventory(db, inv[0])
