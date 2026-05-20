@@ -6,7 +6,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-import websocket
+from . import ws_client as websocket
 
 from extensions import Extension
 
