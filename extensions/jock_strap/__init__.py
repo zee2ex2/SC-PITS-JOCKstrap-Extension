@@ -10,7 +10,7 @@ from . import ws_client as websocket
 
 from extensions import Extension
 
-from render import push_message
+from render import push_message, push_event
 
 AUTH_FILE = None
 SYNC_SETTINGS_FILE = None
@@ -231,6 +231,7 @@ class JockStrapExtension(Extension):
                 qty_val = int(round(quantity_scu * 100))
                 store.add_inventory(db, int(itemid), quality, qty_val, int(stationid) if stationid else None)
                 push_message(f"Synced {item_name} from SHOWER.", "success")
+                push_event("inventory_update", {"action": "add", "itemid": int(itemid), "name": item_name})
             elif action == "delete":
                 qty_val = int(round(quantity_scu * 100))
                 if stationid:
@@ -246,6 +247,7 @@ class JockStrapExtension(Extension):
                 if inv:
                     store.delete_inventory(db, inv[0])
                     push_message(f"Deleted {item_name} via SHOWER.", "success")
+                    push_event("inventory_update", {"action": "delete", "itemid": int(itemid)})
         except Exception:
             pass
         finally:
