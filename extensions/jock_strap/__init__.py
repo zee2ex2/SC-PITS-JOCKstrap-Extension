@@ -10,6 +10,8 @@ import websocket
 
 from extensions import Extension
 
+from render import push_message
+
 AUTH_FILE = None
 SYNC_SETTINGS_FILE = None
 
@@ -89,10 +91,6 @@ class JockStrapExtension(Extension):
     repo_url = "zee2ex2/SC-PITS-JOCKstrap-Extension"
     description = "JOCK Strap — Discord OAuth via SHOWER, community sync, orders, notifications"
 
-    def _set_notice(self, msg, kind="success"):
-        self._notice = msg
-        self._notice_kind = kind
-
     def on_startup(self, g):
         self.g = g
         self.sync_settings = load_sync_settings()
@@ -103,8 +101,6 @@ class JockStrapExtension(Extension):
         self._user_info = {}
         self._version_error = ""
         self._update_url = ""
-        self._notice = ""
-        self._notice_kind = ""
         self._start_sync_engine()
 
     def _is_connected(self):
@@ -227,12 +223,14 @@ class JockStrapExtension(Extension):
             quality = int(data.get("quality", 100))
             quantity_scu = float(data.get("quantity_scu", 0))
             stationid = data.get("stationid", "")
-            row = db.execute("SELECT id FROM item WHERE id=?", (int(itemid),)).fetchone()
+            row = db.execute("SELECT id, name FROM item WHERE id=?", (int(itemid),)).fetchone()
             if not row:
                 return
+            item_name = row["name"]
             if action == "add":
                 qty_val = int(round(quantity_scu * 100))
                 store.add_inventory(db, int(itemid), quality, qty_val, int(stationid) if stationid else None)
+                push_message(f"Synced {item_name} from SHOWER.", "success")
             elif action == "delete":
                 qty_val = int(round(quantity_scu * 100))
                 if stationid:
@@ -381,20 +379,12 @@ class JockStrapExtension(Extension):
                 </div>
             </form>"""
 
-        notice_html = ""
-        if self._notice:
-            notice_cls = "success" if self._notice_kind == "success" else "error"
-            notice_html = f'<div class="messages"><div class="message {notice_cls}">{esc(self._notice)}</div></div>'
-            self._notice = ""
-            self._notice_kind = ""
-
         return f"""
         <section class="panel">
             <div class="section-heading" onclick="toggleSection(this)" style="cursor:pointer">
                 <h2>JOCK Strap <span class="collapse-arrow" style="font-size:12px;margin-left:6px;color:var(--muted)">&#9654;</span></h2>
             </div>
             <div class="collapse-content" style="display:none">
-                {notice_html}
                 {url_form}
                 <hr style="border:none;border-top:1px solid var(--line);margin:16px 0">
                 {login_section}
@@ -548,17 +538,16 @@ class JockStrapExtension(Extension):
         if method != "POST":
             return None, False
         self._ws_close()
-        self._set_notice("Disconnected.")
+        push_message("Disconnected.")
         return self._redirect("/settings")
 
-    # --- Sync ---
     def _handle_sync(self, qs, data, method):
         if method != "POST":
             return None, False
         if not self._is_connected():
-            self._set_notice("Not connected to SHOWER. Login with Discord first.", "error")
+            push_message("Not connected to SHOWER. Login with Discord first.", "error")
             return self._redirect("/settings")
-        self._set_notice("Sync will happen automatically via WebSocket.")
+        push_message("Sync will happen automatically via WebSocket.")
         return self._redirect("/settings")
 
     def _handle_sync_settings(self, qs, data, method):
@@ -566,7 +555,7 @@ class JockStrapExtension(Extension):
             return None, False
         community_url = data.get("community_url", "").strip()
         if not community_url:
-            self._set_notice("Enter a SHOWER server URL.", "error")
+            push_message("Enter a SHOWER server URL.", "error")
             return self._redirect("/settings")
         self._ws_close()
         self.sync_settings["community_url"] = community_url
@@ -576,7 +565,7 @@ class JockStrapExtension(Extension):
         local_url = self.g.get("LOCAL_URL", "http://localhost:9100")
         callback = urllib.parse.quote(f"{local_url}/ext/jock/callback")
         login_url = f"{community_url.rstrip('/')}/auth/jock-login?redirect_uri={callback}"
-        self._set_notice("Redirecting to Discord login...")
+        push_message("Redirecting to Discord login...")
         return self._redirect(login_url)
 
     def _handle_sync_log(self, qs, data, method):
@@ -622,7 +611,7 @@ class JockStrapExtension(Extension):
     def _handle_notification_read(self, qs, data, method):
         if method != "POST":
             return None, False
-        self._set_notice("Marked as read.")
+        push_message("Marked as read.")
         return self._redirect("/ext/jock/notifications")
 
     # --- Orders ---
@@ -662,11 +651,11 @@ class JockStrapExtension(Extension):
                     "min_quality": int(min_quality), "quantity": int(quantity), "notes": notes,
                 })
                 if err:
-                    self._set_notice(f"Failed: {err}", "error")
+                    push_message(f"Failed: {err}", "error")
                     return self._redirect("/ext/jock/orders/create")
-                self._set_notice("Order request created.")
+                push_message("Order request created.")
                 return self._redirect("/ext/jock/orders")
-            self._set_notice("Not connected to SHOWER.", "error")
+            push_message("Not connected to SHOWER.", "error")
             return self._redirect("/ext/jock/orders/create")
         form = """<form method="post" action="/ext/jock/orders/create" class="inline-form" style="flex-direction:column;align-items:stretch">
         <input type="text" name="item_name" placeholder="Item name" required>
@@ -693,11 +682,11 @@ class JockStrapExtension(Extension):
                 "order_id": order_id,
             })
             if err:
-                self._set_notice(f"Failed: {err}", "error")
+                push_message(f"Failed: {err}", "error")
                 return self._redirect("/ext/jock/orders")
-            self._set_notice("Notification sent to requester!")
+            push_message("Notification sent to requester!")
             return self._redirect("/ext/jock/orders")
-        self._set_notice("Not connected.", "error")
+        push_message("Not connected.", "error")
         return self._redirect("/ext/jock/orders")
 
     def _handle_my_orders(self, qs, data, method):
