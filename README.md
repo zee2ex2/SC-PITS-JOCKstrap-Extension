@@ -15,7 +15,7 @@ JOCKstrap is a PITS extension that connects your local inventory to a Community 
 
 ## Installation
 
-1. Download `JOCKstrap_v1.1.zip` from the [Releases page](https://github.com/zee2ex2/SC-PITS-JOCKstrap-Extension/releases)
+1. Download `JOCKstrap_v1.2.0.zip` from the [Releases page](https://github.com/zee2ex2/SC-PITS-JOCKstrap-Extension/releases)
 2. In PITS, go to **Settings → Manage Extensions → Install New Extension**
 3. Select the ZIP file
 4. The extension will appear in the extensions list
