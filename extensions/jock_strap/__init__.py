@@ -191,6 +191,7 @@ class JockStrapExtension(Extension):
 
     def _ws_close(self):
         self._ws_running = False
+        self._ws_connected = False
         ws = self._ws
         if ws:
             try:
