@@ -159,10 +159,10 @@ class JockStrapExtension(Extension):
                     self._ws_connected = True
                     self._user_info = data.get("user", {})
                 elif msg_type in ("auth_error", "disconnect"):
-                    err = data.get("error", "")
                     self._ws_connected = False
                     self._ws_running = False
-                    if "too old" in err or "update" in err.lower():
+                    err = data.get("error", "")
+                    if err:
                         self._version_error = err
                         self._update_url = data.get("update_url", "")
             except Exception:
@@ -515,13 +515,16 @@ class JockStrapExtension(Extension):
         code = qs.get("code", "")
         if not code:
             return self._redirect("/settings", "No auth code received from SHOWER.", "error")
+        self._version_error = ""
+        self._update_url = ""
         self._ws_connect(auth_code=code)
         import time
         for _ in range(50):
             if self._is_connected():
                 return self._redirect("/settings", "Connected to SHOWER!")
             time.sleep(0.1)
-        return self._redirect("/settings", "Connected to SHOWER but WebSocket connection failed. Check that the SHOWER server is reachable.", "error")
+        err = self._version_error or "WebSocket connection failed. Check that the SHOWER server is reachable."
+        return self._redirect("/settings", err, "error")
 
     # --- Logout ---
     def _handle_logout(self, qs, data, method):
